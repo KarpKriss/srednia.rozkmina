@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.2.0
+
+### Added
+
+- Supabase project connected: `srednia.rozkmina`.
+- Database schema for online MVP:
+  - `questions`,
+  - `rooms`,
+  - `players`,
+  - `rounds`,
+  - `answers`,
+  - `round_scores`.
+- RPC functions for room creation, joining, round start, answer submit, reveal/scoring, discussion, and finish.
+- Realtime subscriptions for room, player, round, answer, and score changes.
+- Online frontend flow:
+  - Create room,
+  - Join room,
+  - Lobby,
+  - Answering,
+  - Reveal,
+  - Discussion,
+  - Final score.
+- Supabase config fallback for Vercel deployment.
+
+### Changed
+
+- Scoring is now calculated in Supabase through `finish_round`, not only in local frontend code.
+- README now reflects online MVP status.
+
+### Known MVP limitations
+
+- Answers are hidden by the UI before reveal, but readable technically through the public frontend key.
+- No user accounts yet.
+- No QR code join yet.
+
 ## v0.1.0
 
 ### Added
@@ -18,11 +53,3 @@
 - Supabase client placeholder.
 - Vercel SPA config.
 - Database next steps document.
-
-### Not yet implemented
-
-- Supabase database schema.
-- Online room joining.
-- Realtime synchronization.
-- RLS policies.
-- QR code joining.
