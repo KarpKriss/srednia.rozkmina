@@ -9,8 +9,8 @@ const ROOM_STATE_SELECT = `
   current_round_id,
   round_number,
   max_rounds,
-  players(*),
-  rounds(
+  players!players_room_id_fkey(*),
+  rounds!rounds_room_id_fkey(
     *,
     questions(*)
   )
