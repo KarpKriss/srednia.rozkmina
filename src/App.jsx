@@ -1,273 +1,389 @@
-import { useMemo, useState } from 'react';
-import { QUESTIONS } from './data/questions.js';
-import { createRoomCode } from './lib/roomCode.js';
-import { calculateRoundResults } from './lib/scoring.js';
-import { createSafeId, getOrCreateLocalPlayerId } from './lib/storage.js';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isSupabaseConfigured } from './lib/supabaseClient.js';
+import {
+  createOnlineRoom,
+  fetchRoomState,
+  joinOnlineRoom,
+  moveOnlineRoundToDiscussion,
+  revealOnlineRound,
+  startOnlineRound,
+  submitOnlineAnswer,
+  subscribeToRoom,
+  subscribeToRound,
+  unsubscribe,
+} from './services/gameApi.js';
+import './styles.css';
 
-const PHASES = {
-  START: 'start',
-  LOBBY: 'lobby',
-  ANSWERING: 'answering',
-  REVEAL: 'reveal',
-  DISCUSSION: 'discussion',
-  FINISHED: 'finished',
-};
+const SESSION_STORAGE_KEY = 'srednia-rozkmina-current-session';
+
+function loadSavedSession() {
+  try {
+    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(session) {
+  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+}
+
+function clearSavedSession() {
+  window.localStorage.removeItem(SESSION_STORAGE_KEY);
+}
 
 export default function App() {
-  const localPlayerId = useMemo(() => getOrCreateLocalPlayerId(), []);
-  const [phase, setPhase] = useState(PHASES.START);
-  const [roomCode, setRoomCode] = useState('');
+  const [session, setSession] = useState(() => loadSavedSession());
+  const [roomState, setRoomState] = useState(null);
   const [hostName, setHostName] = useState('Kris');
-  const [guestName, setGuestName] = useState('');
-  const [players, setPlayers] = useState([]);
-  const [roundIndex, setRoundIndex] = useState(0);
-  const [answers, setAnswers] = useState([]);
+  const [playerName, setPlayerName] = useState('');
+  const [roomCodeInput, setRoomCodeInput] = useState('');
   const [ownAnswer, setOwnAnswer] = useState('');
   const [predictedAverage, setPredictedAverage] = useState('');
-  const [lastResult, setLastResult] = useState(null);
+  const [isBusy, setIsBusy] = useState(false);
+  const [error, setError] = useState('');
 
-  const currentQuestion = QUESTIONS[roundIndex % QUESTIONS.length];
-  const isHost = players.some((player) => player.id === localPlayerId && player.isHost);
+  const refreshRoom = useCallback(async () => {
+    if (!session?.roomId) return;
 
-  function createLocalRoom() {
-    setRoomCode(createRoomCode());
-    setPlayers([
-      {
-        id: localPlayerId,
-        name: hostName.trim() || 'Host',
-        score: 0,
-        odklejeniecBadges: 0,
-        isHost: true,
-      },
-    ]);
-    setPhase(PHASES.LOBBY);
+    const nextState = await fetchRoomState(session.roomId);
+    setRoomState(nextState);
+  }, [session?.roomId]);
+
+  useEffect(() => {
+    if (!session?.roomId) return;
+
+    refreshRoom().catch((nextError) => setError(nextError.message));
+
+    const roomChannel = subscribeToRoom(session.roomId, () => {
+      refreshRoom().catch((nextError) => setError(nextError.message));
+    });
+
+    return () => unsubscribe(roomChannel);
+  }, [refreshRoom, session?.roomId]);
+
+  useEffect(() => {
+    const roundId = roomState?.currentRound?.id;
+    if (!roundId) return;
+
+    const roundChannel = subscribeToRound(roundId, () => {
+      refreshRoom().catch((nextError) => setError(nextError.message));
+    });
+
+    return () => unsubscribe(roundChannel);
+  }, [refreshRoom, roomState?.currentRound?.id]);
+
+  const players = useMemo(() => roomState?.players ?? [], [roomState]);
+  const room = roomState?.room ?? null;
+  const currentRound = roomState?.currentRound ?? null;
+  const currentQuestion = roomState?.currentQuestion ?? null;
+  const answers = roomState?.answers ?? [];
+  const roundScores = roomState?.roundScores ?? [];
+  const currentPlayer = players.find((player) => player.id === session?.playerId) ?? null;
+  const isHost = Boolean(session?.isHost);
+  const hasSubmitted = answers.some((answer) => answer.player_id === session?.playerId);
+
+  async function runAction(action) {
+    setError('');
+    setIsBusy(true);
+
+    try {
+      await action();
+      await refreshRoom();
+    } catch (nextError) {
+      setError(nextError.message || 'Something went wrong.');
+    } finally {
+      setIsBusy(false);
+    }
   }
 
-  function addDemoPlayer() {
-    const name = guestName.trim() || `Gracz ${players.length + 1}`;
-    setPlayers((current) => [
-      ...current,
-      {
-        id: createSafeId(),
-        name,
-        score: 0,
-        odklejeniecBadges: 0,
-        isHost: false,
-      },
-    ]);
-    setGuestName('');
-  }
-
-  function startRound() {
-    setAnswers([]);
-    setOwnAnswer('');
-    setPredictedAverage('');
-    setLastResult(null);
-    setPhase(PHASES.ANSWERING);
-  }
-
-  function submitHostAnswer(event) {
+  async function handleCreateRoom(event) {
     event.preventDefault();
 
-    const own = Number(ownAnswer);
-    const prediction = Number(predictedAverage);
+    await runAction(async () => {
+      const nextSession = await createOnlineRoom(hostName.trim() || 'Host', 7);
+      saveSession(nextSession);
+      setSession(nextSession);
+      const nextState = await fetchRoomState(nextSession.roomId);
+      setRoomState(nextState);
+    });
+  }
 
-    if (!Number.isFinite(own) || !Number.isFinite(prediction)) {
-      return;
-    }
+  async function handleJoinRoom(event) {
+    event.preventDefault();
 
-    setAnswers((current) => [
-      ...current.filter((answer) => answer.playerId !== localPlayerId),
-      {
-        playerId: localPlayerId,
-        ownAnswer: own,
-        predictedAverage: prediction,
-      },
-    ]);
+    await runAction(async () => {
+      const nextSession = await joinOnlineRoom(roomCodeInput.trim().toUpperCase(), playerName.trim() || 'Gracz');
+      saveSession(nextSession);
+      setSession(nextSession);
+      const nextState = await fetchRoomState(nextSession.roomId);
+      setRoomState(nextState);
+    });
+  }
 
+  async function handleStartRound() {
+    await runAction(async () => {
+      await startOnlineRound(session.roomId, session.hostKey);
+    });
+  }
+
+  async function handleSubmitAnswer(event) {
+    event.preventDefault();
+
+    await runAction(async () => {
+      await submitOnlineAnswer(
+        currentRound.id,
+        session.playerId,
+        session.clientKey,
+        ownAnswer,
+        predictedAverage
+      );
+      setOwnAnswer('');
+      setPredictedAverage('');
+    });
+  }
+
+  async function handleRevealRound() {
+    await runAction(async () => {
+      await revealOnlineRound(currentRound.id, session.hostKey);
+    });
+  }
+
+  async function handleDiscussion() {
+    await runAction(async () => {
+      await moveOnlineRoundToDiscussion(currentRound.id, session.hostKey);
+    });
+  }
+
+  function leaveRoom() {
+    clearSavedSession();
+    setSession(null);
+    setRoomState(null);
     setOwnAnswer('');
     setPredictedAverage('');
-  }
-
-  function fillDemoAnswers() {
-    const hostAnswer = answers.find((answer) => answer.playerId === localPlayerId);
-
-    if (!hostAnswer) {
-      return;
-    }
-
-    const generatedAnswers = players
-      .filter((player) => player.id !== localPlayerId)
-      .map((player, index) => {
-        const base = hostAnswer.ownAnswer;
-        const spread = (index + 1) * 7;
-        return {
-          playerId: player.id,
-          ownAnswer: Math.max(0, Math.round(base + spread * (index % 2 === 0 ? 1 : -1))),
-          predictedAverage: Math.max(0, Math.round(hostAnswer.predictedAverage + spread / 2)),
-        };
-      });
-
-    setAnswers([hostAnswer, ...generatedAnswers]);
-  }
-
-  function revealRound() {
-    const result = calculateRoundResults(players, answers);
-    setLastResult(result);
-    setPlayers(result.updatedPlayers);
-    setPhase(PHASES.REVEAL);
-  }
-
-  function nextRound() {
-    if (roundIndex + 1 >= QUESTIONS.length) {
-      setPhase(PHASES.FINISHED);
-      return;
-    }
-
-    setRoundIndex((current) => current + 1);
-    setPhase(PHASES.DISCUSSION);
-  }
-
-  function resetGame() {
-    setPhase(PHASES.START);
-    setRoomCode('');
-    setPlayers([]);
-    setRoundIndex(0);
-    setAnswers([]);
-    setLastResult(null);
   }
 
   return (
     <main className="appShell">
       <header className="topBar">
         <div>
-          <p className="eyebrow">party game</p>
+          <p className="eyebrow">online party game</p>
           <h1>Średnia Rozkmina</h1>
         </div>
         <span className={isSupabaseConfigured ? 'status online' : 'status'}>
-          {isSupabaseConfigured ? 'Supabase ready' : 'Local scaffold'}
+          {isSupabaseConfigured ? 'Supabase online' : 'Local scaffold'}
         </span>
       </header>
 
-      {phase === PHASES.START && (
-        <section className="card hero">
-          <p className="eyebrow">v0.1 frontend scaffold</p>
-          <h2>Utwórz pokój i przetestuj mechanikę gry.</h2>
-          <p>
-            Ta wersja ma lokalny tryb demo. Online roomy podepniemy w kolejnym kroku przez Supabase.
-          </p>
+      {error && <div className="errorBox">{error}</div>}
 
-          <label>
-            Nick hosta
-            <input value={hostName} onChange={(event) => setHostName(event.target.value)} />
-          </label>
-
-          <button className="primary" onClick={createLocalRoom}>Create room</button>
-        </section>
-      )}
-
-      {phase === PHASES.LOBBY && (
+      {!session && (
         <section className="grid">
-          <div className="card">
-            <p className="eyebrow">room code</p>
-            <div className="roomCode">{roomCode}</div>
-            <p className="muted">Docelowo tutaj będzie link i QR code dla znajomych.</p>
-          </div>
-
-          <div className="card">
-            <h2>Lobby</h2>
-            <PlayerList players={players} />
-
-            <div className="inlineForm">
-              <input
-                placeholder="Dodaj gracza demo"
-                value={guestName}
-                onChange={(event) => setGuestName(event.target.value)}
-              />
-              <button onClick={addDemoPlayer}>Add</button>
-            </div>
-
-            <button className="primary" disabled={players.length < 2 || !isHost} onClick={startRound}>
-              Start game
-            </button>
-          </div>
-        </section>
-      )}
-
-      {phase === PHASES.ANSWERING && (
-        <section className="card">
-          <p className="eyebrow">round {roundIndex + 1}</p>
-          <h2>{currentQuestion.text}</h2>
-          <p className="unit">Jednostka: {currentQuestion.unit}</p>
-
-          <form className="answerForm" onSubmit={submitHostAnswer}>
+          <form className="card hero" onSubmit={handleCreateRoom}>
+            <p className="eyebrow">host</p>
+            <h2>Załóż pokój gry.</h2>
             <label>
-              Moja odpowiedź
-              <input
-                inputMode="decimal"
-                type="number"
-                value={ownAnswer}
-                onChange={(event) => setOwnAnswer(event.target.value)}
-              />
+              Twój nick
+              <input value={hostName} onChange={(event) => setHostName(event.target.value)} />
             </label>
-            <label>
-              Przewidywana średnia grupy
-              <input
-                inputMode="decimal"
-                type="number"
-                value={predictedAverage}
-                onChange={(event) => setPredictedAverage(event.target.value)}
-              />
-            </label>
-            <button className="primary" type="submit">Submit answer</button>
+            <button className="primary" disabled={isBusy} type="submit">Create room</button>
           </form>
 
-          <div className="actionRow">
-            <button disabled={!answers.some((answer) => answer.playerId === localPlayerId)} onClick={fillDemoAnswers}>
-              Fill demo answers
-            </button>
-            <button disabled={answers.length !== players.length} onClick={revealRound}>
-              Reveal round ({answers.length}/{players.length})
-            </button>
-          </div>
+          <form className="card hero" onSubmit={handleJoinRoom}>
+            <p className="eyebrow">player</p>
+            <h2>Dołącz kodem.</h2>
+            <label>
+              Kod pokoju
+              <input value={roomCodeInput} onChange={(event) => setRoomCodeInput(event.target.value)} placeholder="ABCD" />
+            </label>
+            <label>
+              Twój nick
+              <input value={playerName} onChange={(event) => setPlayerName(event.target.value)} placeholder="np. Ola" />
+            </label>
+            <button className="primary" disabled={isBusy} type="submit">Join room</button>
+          </form>
         </section>
       )}
 
-      {phase === PHASES.REVEAL && lastResult && (
+      {session && !roomState && (
+        <section className="card hero">
+          <p className="eyebrow">loading</p>
+          <h2>Ładuję pokój...</h2>
+          <button onClick={leaveRoom}>Reset session</button>
+        </section>
+      )}
+
+      {session && roomState && (
         <section className="grid">
-          <div className="card highlight">
-            <p className="eyebrow">average</p>
-            <div className="bigNumber">{lastResult.average}</div>
-            <p>{currentQuestion.unit}</p>
-          </div>
+          <aside className="card">
+            <p className="eyebrow">room code</p>
+            <div className="roomCode">{room?.code}</div>
+            <p className="muted">Daj ten kod znajomym. Wchodzą na stronę i klikają Join room.</p>
+            <button onClick={leaveRoom}>Leave room</button>
+          </aside>
 
-          <div className="card">
-            <h2>Round result</h2>
-            <ResultTable players={players} answers={answers} result={lastResult} unit={currentQuestion.unit} />
-            <button className="primary" onClick={nextRound}>Discussion / Next</button>
-          </div>
-        </section>
-      )}
+          <section className="card">
+            <div className="sectionHeader">
+              <div>
+                <p className="eyebrow">status: {room?.status}</p>
+                <h2>{getPhaseTitle(room?.status)}</h2>
+              </div>
+              {currentPlayer && <span className="pill">{currentPlayer.name}</span>}
+            </div>
 
-      {phase === PHASES.DISCUSSION && (
-        <section className="card hero">
-          <p className="eyebrow">discussion</p>
-          <h2>Czas na obronę Odklejeńca i krótką rozkminę.</h2>
-          <p>Host może przejść do kolejnej rundy, gdy rozmowa naturalnie się skończy.</p>
-          <button className="primary" onClick={startRound}>Next round</button>
-        </section>
-      )}
+            {room?.status === 'lobby' && (
+              <LobbyView players={players} isHost={isHost} isBusy={isBusy} onStartRound={handleStartRound} />
+            )}
 
-      {phase === PHASES.FINISHED && (
-        <section className="card hero">
-          <p className="eyebrow">final score</p>
-          <h2>Koniec gry</h2>
-          <PlayerList players={[...players].sort((a, b) => b.score - a.score)} />
-          <button className="primary" onClick={resetGame}>New game</button>
+            {room?.status === 'answering' && currentQuestion && currentRound && (
+              <AnsweringView
+                question={currentQuestion}
+                players={players}
+                answers={answers}
+                ownAnswer={ownAnswer}
+                predictedAverage={predictedAverage}
+                setOwnAnswer={setOwnAnswer}
+                setPredictedAverage={setPredictedAverage}
+                hasSubmitted={hasSubmitted}
+                isHost={isHost}
+                isBusy={isBusy}
+                onSubmitAnswer={handleSubmitAnswer}
+                onReveal={handleRevealRound}
+              />
+            )}
+
+            {room?.status === 'reveal' && currentQuestion && currentRound && (
+              <RevealView
+                question={currentQuestion}
+                round={currentRound}
+                players={players}
+                answers={answers}
+                scores={roundScores}
+                isHost={isHost}
+                isBusy={isBusy}
+                onDiscussion={handleDiscussion}
+              />
+            )}
+
+            {room?.status === 'discussion' && (
+              <DiscussionView isHost={isHost} isBusy={isBusy} onNextRound={handleStartRound} />
+            )}
+
+            {room?.status === 'finished' && <FinalView players={players} />}
+          </section>
         </section>
       )}
     </main>
+  );
+}
+
+function getPhaseTitle(status) {
+  switch (status) {
+    case 'lobby': return 'Czekamy na graczy';
+    case 'answering': return 'Odpowiadamy';
+    case 'reveal': return 'Wyniki rundy';
+    case 'discussion': return 'Czas na rozkminę';
+    case 'finished': return 'Koniec gry';
+    default: return 'Gra';
+  }
+}
+
+function LobbyView({ players, isHost, isBusy, onStartRound }) {
+  return (
+    <div>
+      <PlayerList players={players} />
+      {isHost ? (
+        <button className="primary" disabled={players.length < 2 || isBusy} onClick={onStartRound}>
+          Start round
+        </button>
+      ) : (
+        <p className="muted">Czekamy, aż host rozpocznie rundę.</p>
+      )}
+    </div>
+  );
+}
+
+function AnsweringView(props) {
+  const {
+    question,
+    players,
+    answers,
+    ownAnswer,
+    predictedAverage,
+    setOwnAnswer,
+    setPredictedAverage,
+    hasSubmitted,
+    isHost,
+    isBusy,
+    onSubmitAnswer,
+    onReveal,
+  } = props;
+
+  return (
+    <div>
+      <p className="eyebrow">{question.category}</p>
+      <h2>{question.text}</h2>
+      <p className="unit">Jednostka: {question.unit}</p>
+
+      {hasSubmitted ? (
+        <div className="successBox">Odpowiedź zapisana. Czekamy na resztę: {answers.length}/{players.length}</div>
+      ) : (
+        <form className="answerForm" onSubmit={onSubmitAnswer}>
+          <label>
+            Moja odpowiedź
+            <input inputMode="decimal" type="number" value={ownAnswer} onChange={(event) => setOwnAnswer(event.target.value)} required />
+          </label>
+          <label>
+            Przewidywana średnia grupy
+            <input inputMode="decimal" type="number" value={predictedAverage} onChange={(event) => setPredictedAverage(event.target.value)} required />
+          </label>
+          <button className="primary" disabled={isBusy} type="submit">Submit answer</button>
+        </form>
+      )}
+
+      {isHost && (
+        <div className="actionRow">
+          <button disabled={answers.length < players.length || isBusy} onClick={onReveal}>
+            Reveal round ({answers.length}/{players.length})
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RevealView({ question, round, players, answers, scores, isHost, isBusy, onDiscussion }) {
+  return (
+    <div>
+      <p className="eyebrow">average</p>
+      <div className="bigNumber">{round.average}</div>
+      <p className="unit">{question.unit}</p>
+      <ResultTable players={players} answers={answers} scores={scores} unit={question.unit} />
+      {isHost && <button className="primary" disabled={isBusy} onClick={onDiscussion}>Discussion</button>}
+    </div>
+  );
+}
+
+function DiscussionView({ isHost, isBusy, onNextRound }) {
+  return (
+    <div className="hero">
+      <h2>Odklejeniec broni odpowiedzi. Reszta może rozkminiać.</h2>
+      {isHost ? (
+        <button className="primary" disabled={isBusy} onClick={onNextRound}>Next round</button>
+      ) : (
+        <p className="muted">Czekamy na kolejną rundę.</p>
+      )}
+    </div>
+  );
+}
+
+function FinalView({ players }) {
+  return (
+    <div>
+      <h2>Final score</h2>
+      <PlayerList players={[...players].sort((a, b) => b.score - a.score)} />
+    </div>
   );
 }
 
@@ -276,36 +392,41 @@ function PlayerList({ players }) {
     <ul className="playerList">
       {players.map((player) => (
         <li key={player.id}>
-          <span>{player.name}{player.isHost ? ' 👑' : ''}</span>
+          <span>{player.name}{player.is_host ? ' 👑' : ''}</span>
           <strong>{player.score} pkt</strong>
-          <small>{player.odklejeniecBadges}/3 odklejeńca</small>
+          <small>{player.odklejeniec_badges}/3 odklejeńca</small>
         </li>
       ))}
     </ul>
   );
 }
 
-function ResultTable({ players, answers, result, unit }) {
-  const playerMap = new Map(players.map((player) => [player.id, player]));
-  const answerMap = new Map(answers.map((answer) => [answer.playerId, answer]));
-  const rankingMap = new Map(result.predictionRanking.map((entry, index) => [entry.playerId, index + 1]));
-  const odklejeniecIds = new Set(result.odklejency.map((entry) => entry.playerId));
+function ResultTable({ players, answers, scores, unit }) {
+  const answerMap = new Map(answers.map((answer) => [answer.player_id, answer]));
+  const scoreByPlayer = new Map();
+  const badgePlayerIds = new Set();
+  const penaltyPlayerIds = new Set();
+
+  scores.forEach((score) => {
+    scoreByPlayer.set(score.player_id, (scoreByPlayer.get(score.player_id) ?? 0) + score.points);
+    if (score.reason === 'odklejeniec_badge') badgePlayerIds.add(score.player_id);
+    if (score.reason === 'odklejeniec_penalty') penaltyPlayerIds.add(score.player_id);
+  });
 
   return (
     <div className="resultList">
       {players.map((player) => {
         const answer = answerMap.get(player.id);
-        const rank = rankingMap.get(player.id);
+        const isOdklejeniec = badgePlayerIds.has(player.id);
         return (
-          <article key={player.id} className={odklejeniecIds.has(player.id) ? 'resultRow odklejeniec' : 'resultRow'}>
+          <article key={player.id} className={isOdklejeniec ? 'resultRow odklejeniec' : 'resultRow'}>
             <div>
-              <strong>{playerMap.get(player.id)?.name}</strong>
-              {odklejeniecIds.has(player.id) && <span className="badge">Odklejeniec</span>}
+              <strong>{player.name}</strong>
+              {isOdklejeniec && <span className="badge">Odklejeniec</span>}
             </div>
-            <p>Odpowiedź: {answer?.ownAnswer} {unit}</p>
-            <p>Typowana średnia: {answer?.predictedAverage} {unit}</p>
-            <p>Miejsce w typowaniu: {rank}</p>
-            <p>Zmiana punktów: {player.lastRoundPoints ?? 0}{player.penaltyApplied ? ' / kara -2' : ''}</p>
+            <p>Odpowiedź: {answer?.own_answer ?? '-'} {unit}</p>
+            <p>Typowana średnia: {answer?.predicted_average ?? '-'} {unit}</p>
+            <p>Zmiana punktów: {scoreByPlayer.get(player.id) ?? 0}{penaltyPlayerIds.has(player.id) ? ' / kara -2' : ''}</p>
           </article>
         );
       })}
