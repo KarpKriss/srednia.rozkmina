@@ -7,7 +7,15 @@ export function getOrCreateLocalPlayerId() {
     return existing;
   }
 
-  const id = crypto.randomUUID();
+  const id = createSafeId();
   window.localStorage.setItem(PLAYER_KEY, id);
   return id;
+}
+
+export function createSafeId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
