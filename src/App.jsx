@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { QUESTIONS } from './data/questions.js';
 import { createRoomCode } from './lib/roomCode.js';
 import { calculateRoundResults } from './lib/scoring.js';
-import { getOrCreateLocalPlayerId } from './lib/storage.js';
+import { createSafeId, getOrCreateLocalPlayerId } from './lib/storage.js';
 import { isSupabaseConfigured } from './lib/supabaseClient.js';
 
 const PHASES = {
@@ -49,7 +49,7 @@ export default function App() {
     setPlayers((current) => [
       ...current,
       {
-        id: crypto.randomUUID(),
+        id: createSafeId(),
         name,
         score: 0,
         odklejeniecBadges: 0,
