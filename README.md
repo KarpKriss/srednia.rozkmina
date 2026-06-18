@@ -1,0 +1,1 @@
+# srednia.rozkmina
