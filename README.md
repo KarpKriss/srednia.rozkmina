@@ -4,14 +4,29 @@ Mobile-first online party game based on numeric dilemmas, reading the group aver
 
 ## Current status
 
-This repository contains the frontend scaffold for the game. The Supabase database is intentionally not wired yet — the next step is to create the database schema, RLS policies, and realtime subscriptions.
+The app is connected to Supabase and supports the first online MVP flow:
+
+- host creates a room,
+- players join by room code,
+- host starts a round,
+- players submit two numeric answers,
+- host reveals the round,
+- Supabase calculates average, prediction points, Odklejeniec badge, and -2 penalty after 3 badges.
 
 ## Stack
 
 - React + Vite
-- Supabase planned for database and realtime room state
-- Vercel planned for hosting
-- GitHub for source control
+- Supabase database + RPC + realtime
+- Vercel hosting
+- GitHub source control
+
+## Supabase project
+
+Project: `srednia.rozkmina`
+
+Project ref: `cxqbwkxifiyiuncljmzk`
+
+See `supabase/README.md` for schema and RPC notes.
 
 ## Core game loop
 
@@ -21,10 +36,10 @@ This repository contains the frontend scaffold for the game. The Supabase databa
 4. Each player submits two numbers:
    - own answer
    - predicted group average
-5. The app calculates:
-   - group average from own answers
-   - closest predictions
-   - the player farthest from the average: `Odklejeniec`
+5. Supabase calculates:
+   - group average from own answers,
+   - closest predictions,
+   - the player farthest from the average: `Odklejeniec`.
 6. Scores and badges are updated.
 7. After 3 Odklejeniec badges, the player gets -2 points and the badge counter resets.
 
@@ -37,12 +52,14 @@ npm run dev
 
 ## Environment variables
 
-Copy `.env.example` to `.env.local` after Supabase is created:
+The frontend already contains public Supabase fallback config, so Vercel should work without manual env setup.
+
+You can still copy `.env.example` to `.env.local` for explicit local configuration:
 
 ```bash
 cp .env.example .env.local
 ```
 
-## Next step
+## Known MVP simplification
 
-See `docs/DATABASE_NEXT_STEPS.md`.
+Answers are hidden by the UI before reveal, but the MVP database policy currently allows reading answers from the frontend key. This is acceptable for a friend-party prototype, but should be hardened before public release.
