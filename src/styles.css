@@ -93,7 +93,8 @@ label {
   text-transform: uppercase;
 }
 
-.status {
+.status,
+.pill {
   white-space: nowrap;
   border-radius: 999px;
   padding: 8px 10px;
@@ -106,6 +107,11 @@ label {
 .status.online {
   background: #dcfce7;
   color: #166534;
+}
+
+.pill {
+  background: #eef2ff;
+  color: #3730a3;
 }
 
 .grid {
@@ -131,6 +137,14 @@ label {
   letter-spacing: -0.08em;
 }
 
+.sectionHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
 .muted,
 .unit {
   color: #6b7280;
@@ -152,6 +166,27 @@ label {
 .highlight .eyebrow,
 .highlight p {
   color: #d1d5db;
+}
+
+.errorBox,
+.successBox {
+  border-radius: 18px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  font-weight: 800;
+}
+
+.errorBox {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.successBox {
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+  margin-top: 18px;
 }
 
 .playerList {
